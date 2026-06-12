@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>EPUB Watermark Cleaner</title>
+<meta name="description" content="Remove OceanofPDF.com watermarks from EPUB files — fully offline, on-device.">
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0f1117">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="EPUB Cleaner">
+<meta name="mobile-web-app-capable" content="yes">
+
+<!-- JSZip, vendored locally for offline use -->
+<script src="jszip.min.js"></script>
+
+<style>
+  :root{
+    --bg:#0f1117; --bg-2:#141823; --ink:#ece7da; --muted:#9aa1ad;
+    --line:#2a3140; --paper:#f4eee2; --accent:#5ed3b9; --accent-deep:#3fae97;
+    --danger:#e88; --shadow:0 24px 60px -28px rgba(0,0,0,.7);
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Hoefler Text",Georgia,"Times New Roman",serif;
+    --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  html[data-theme="light"]{
+    --bg:#efe9dc; --bg-2:#f7f3ea; --ink:#23262d; --muted:#6b7280;
+    --line:#ddd4c2; --paper:#ffffff; --accent:#2f9c84; --accent-deep:#1f7d68;
+    --shadow:0 24px 60px -30px rgba(60,50,30,.35);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    font-family:var(--sans); background:
+      radial-gradient(120% 80% at 50% -10%, rgba(94,211,185,.10), transparent 60%),
+      var(--bg);
+    color:var(--ink); line-height:1.6;
+    padding:max(24px,env(safe-area-inset-top)) 20px calc(40px + env(safe-area-inset-bottom));
+    -webkit-font-smoothing:antialiased; transition:background .35s,color .35s;
+  }
+  .wrap{max-width:680px;margin:0 auto}
+  header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:6px}
+  .brand{display:flex;align-items:center;gap:13px;min-width:0}
+  .brand img{width:42px;height:42px;border-radius:11px;box-shadow:var(--shadow);flex:none}
+  .brand h1{
+    font-family:var(--serif);font-weight:600;font-size:1.5rem;letter-spacing:.2px;margin:0;
+    line-height:1.15;
+  }
+  .brand .sub{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+  .iconbtn{
+    background:var(--bg-2);border:1px solid var(--line);color:var(--ink);
+    width:40px;height:40px;border-radius:11px;cursor:pointer;font-size:18px;flex:none;
+    display:grid;place-items:center;transition:transform .15s,border-color .2s;
+  }
+  .iconbtn:hover{transform:translateY(-1px);border-color:var(--accent)}
+  .lede{color:var(--muted);font-size:.97rem;margin:14px 2px 22px;max-width:54ch}
+  .lede b{color:var(--ink);font-weight:600}
+
+  .drop{
+    position:relative;border:1.5px dashed var(--line);border-radius:20px;
+    background:linear-gradient(180deg,var(--bg-2),transparent);
+    padding:46px 24px;text-align:center;cursor:pointer;
+    transition:border-color .2s,background .2s,transform .1s;
+  }
+  .drop:hover{border-color:var(--accent)}
+  .drop.drag{border-color:var(--accent);background:rgba(94,211,185,.08);transform:scale(1.005)}
+  .drop .big{font-family:var(--serif);font-size:1.18rem;margin:10px 0 4px;color:var(--ink)}
+  .drop .small{color:var(--muted);font-size:.86rem}
+  .wave{display:block;margin:0 auto 6px;color:var(--accent)}
+
+  #progress{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:22px 0 0;display:none}
+  #bar{height:100%;width:0;background:linear-gradient(90deg,var(--accent-deep),var(--accent));
+       border-radius:99px;transition:width .15s ease}
+  #status{margin-top:14px;min-height:1.4em;font-size:.95rem;color:var(--muted)}
+  #status.err{color:var(--danger)}
+
+  .result{margin-top:18px;border:1px solid var(--line);border-radius:16px;background:var(--bg-2);
+           padding:18px 18px 6px;display:none}
+  .result.show{display:block;animation:rise .4s ease}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .result h3{font-family:var(--serif);margin:0 0 12px;font-size:1.1rem;font-weight:600}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+  .stat{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 10px;text-align:center}
+  .stat .n{font-family:var(--serif);font-size:1.5rem;color:var(--accent);line-height:1}
+  .stat .l{font-size:.7rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-top:6px}
+  .dl{display:inline-flex;align-items:center;gap:8px;width:100%;justify-content:center;
+      background:var(--accent);color:#06231d;border:none;border-radius:12px;padding:13px;
+      font-weight:700;font-size:.98rem;cursor:pointer;margin-bottom:14px;text-decoration:none}
+  .dl:hover{background:var(--accent-deep)}
+  .note{font-size:.8rem;color:var(--muted);margin:0 0 12px}
+
+  footer{margin-top:34px;color:var(--muted);font-size:.8rem;text-align:center}
+  footer a{color:var(--accent);text-decoration:none}
+  .pill{display:inline-block;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;
+        border:1px solid var(--line);border-radius:99px;padding:3px 10px;color:var(--muted);margin-top:10px}
+  #installBtn{display:none;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <img src="icon-192.png" alt="">
+      <div>
+        <div class="sub">offline · on-device</div>
+        <h1>EPUB Watermark Cleaner</h1>
+      </div>
+    </div>
+    <button id="themeToggle" class="iconbtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  </header>
+
+  <p class="lede">Strips <b>OceanofPDF.com</b> watermarks out of EPUB files for good — not just hidden,
+  but the watermark text, links, logo images and inserted pages are <b>fully removed</b>. Everything runs
+  in your browser; your book never leaves your device.</p>
+
+  <div class="drop" id="drop" role="button" tabindex="0" aria-label="Choose or drop an EPUB file">
+    <svg class="wave" width="46" height="22" viewBox="0 0 46 22" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
+      <path d="M2 11 C 9 2, 14 2, 21 11 S 35 20, 44 11"/>
+    </svg>
+    <div class="big">Drop your EPUB here</div>
+    <div class="small">or tap to choose a file</div>
+    <input type="file" id="file" accept=".epub,application/epub+zip" multiple style="display:none">
+  </div>
+
+  <div id="progress"><div id="bar"></div></div>
+  <div id="status"></div>
+
+  <div class="result" id="result">
+    <h3 id="resultTitle">Cleaned ✓</h3>
+    <div class="stats">
+      <div class="stat"><div class="n" id="sInst">0</div><div class="l">marks</div></div>
+      <div class="stat"><div class="n" id="sImg">0</div><div class="l">images</div></div>
+      <div class="stat"><div class="n" id="sPage">0</div><div class="l">pages</div></div>
+    </div>
+    <a class="dl" id="dl" download>↓ Download cleaned EPUB</a>
+    <p class="note" id="note"></p>
+  </div>
+
+  <button id="installBtn" class="iconbtn" style="width:auto;padding:0 16px;height:42px;border-radius:12px;">⤓ Install app</button>
+
+  <footer>
+    Runs entirely offline once loaded. <span class="pill">PWA</span><br>
+    <a id="origin" href="https://github.com/rexroze/oceanofpdf-parser" target="_blank" rel="noopener">based on the original EPUB Parser</a>
+  </footer>
+</div>
+
+<script>
+/* ============================================================
+   Watermark-removal engine (tested separately; see test.js)
+   ============================================================ */
+const BRAND   = /ocean\s*of\s*pdf/i;
+const BRAND_G = /ocean\s*of\s*pdf\s*(?:\.\s*com)?/gi;
+const HREF_BRAND = /oceanofpdf/i;
+const BOILER = /\b(?:visit|downloaded\s+from|download(?:ed)?(?:\s+more)?|read\s+more(?:\s+at)?|more\s+free\s+books(?:\s+at)?|free\s+books(?:\s+at)?|get\s+(?:more\s+)?books(?:\s+at)?|find\s+more(?:\s+books)?(?:\s+at)?|for\s+more\s+books|www|https?)\b/gi;
+const BLOCKISH = new Set(['a','p','h1','h2','h3','h4','h5','h6','div','span','li','td','th','section','figure','figcaption','header','footer','blockquote','center','small','strong','em','b','i']);
+
+const parser = new DOMParser();
+const serializer = new XMLSerializer();
+
+function isWatermarkOnlyText(text){
+  if(!text) return false;
+  let t = text.replace(/\u00a0/g,' ');
+  if(!BRAND.test(t)) return false;
+  t = t.replace(BRAND_G,' ').replace(BOILER,' ');
+  t = t.replace(/[\s.,\-–—:;|•*·\u2022()[\]'"“”‘’/\\<>~!?@#]+/g,'');
+  return t.length===0;
+}
+function hasMeaningfulImage(el){
+  const imgs = el.querySelectorAll('img,image,svg');
+  for(const im of imgs){
+    const src = im.getAttribute('src')||im.getAttribute('href')||im.getAttribute('xlink:href')||'';
+    if(!HREF_BRAND.test(src)) return true;
+  }
+  return false;
+}
+function anyAncestorIn(el,set){let p=el.parentNode;while(p){if(set.has(p))return true;p=p.parentNode;}return false;}
+function countBrand(str){const m=str.match(/ocean\s*of\s*pdf/gi);return m?m.length:0;}
+function baseName(p){return p.split('/').pop();}
+
+function cleanDocument(str, mime){
+  const prolog  = (str.match(/^\uFEFF?\s*<\?xml[^>]*\?>/i)||[''])[0];
+  const doctype = (str.match(/<!DOCTYPE[^>]*>/i)||[''])[0];
+  let doc;
+  try{
+    doc = parser.parseFromString(str, mime);
+    if(!doc || doc.getElementsByTagName('parsererror').length) throw 0;
+  }catch(e){
+    return { xml:textFallback(str), removed:countBrand(str), emptyDoc:false };
+  }
+  const removed = countBrand(str);
+
+  doc.querySelectorAll('img,image').forEach(im=>{
+    const src=im.getAttribute('src')||im.getAttribute('href')||im.getAttribute('xlink:href')||'';
+    if(HREF_BRAND.test(src)) im.parentNode&&im.parentNode.removeChild(im);
+  });
+  doc.querySelectorAll('a[href],link[href]').forEach(a=>{
+    const href=a.getAttribute('href')||'';
+    if(HREF_BRAND.test(href)){
+      if(isWatermarkOnlyText(a.textContent)||!a.textContent.trim()){ a.parentNode&&a.parentNode.removeChild(a); }
+      else{ a.replaceWith(...Array.from(a.childNodes)); }
+    }
+  });
+
+  const qualify = new Set();
+  doc.querySelectorAll('*').forEach(el=>{
+    const tag=(el.tagName||'').toLowerCase();
+    if(!BLOCKISH.has(tag)) return;
+    if(hasMeaningfulImage(el)) return;
+    if(isWatermarkOnlyText(el.textContent)) qualify.add(el);
+  });
+  qualify.forEach(el=>{ if(!anyAncestorIn(el,qualify)&&el.parentNode) el.parentNode.removeChild(el); });
+
+  doc.querySelectorAll('a,p,span,h1,h2,h3,h4,h5,h6,li,div').forEach(el=>{
+    if(el.children.length===0 && !el.textContent.trim() &&
+       (!el.querySelector || !el.querySelector('img,image,svg,br')) && el.parentNode){
+      el.parentNode.removeChild(el);
+    }
+  });
+
+  let xml = serializer.serializeToString(doc);
+  if(prolog && !/^\uFEFF?\s*<\?xml/i.test(xml)) xml = prolog+'\n'+xml;
+  if(doctype && !/<!DOCTYPE/i.test(xml)){
+    xml = (prolog?prolog+'\n':'') + doctype + '\n' + xml.replace(prolog,'').replace(/^\n/,'');
+  }
+  xml = xml.replace(BRAND_G,'');
+
+  const body = doc.querySelector('body');
+  const emptyDoc = BRAND.test(str) && body && !body.textContent.trim() &&
+                   !body.querySelector('img,image,svg,table,video,audio');
+  return { xml, removed, emptyDoc:!!emptyDoc };
+}
+function textFallback(str){
+  let out = str
+    .replace(/<(p|h[1-6]|div|a|span|center|small)\b[^>]*>(?:\s|&nbsp;|<br\s*\/?>)*(?:<a\b[^>]*>)?\s*(?:visit\s+)?ocean\s*of\s*pdf(?:\.com)?\s*(?:<\/a>)?(?:\s|&nbsp;|<br\s*\/?>)*<\/\1>/gi,'')
+    .replace(/<img\b[^>]*oceanofpdf[^>]*>/gi,'')
+    .replace(BRAND_G,'');
+  return out;
+}
+function stripBrandFromTextNodes(doc){
+  (function walk(node){
+    for(let c=node.firstChild;c;c=c.nextSibling){
+      if(c.nodeType===3){ if(BRAND.test(c.nodeValue)) c.nodeValue=c.nodeValue.replace(BRAND_G,'').replace(/\s{2,}/g,' ').trim(); }
+      else if(c.nodeType===1) walk(c);
+    }
+  })(doc.documentElement);
+}
+function cleanOpf(str, deletedBN){
+  let doc; try{doc=parser.parseFromString(str,'application/xml');if(doc.getElementsByTagName('parsererror').length)throw 0;}
+  catch(e){return str.replace(BRAND_G,'');}
+  const removedIds=new Set();
+  doc.querySelectorAll('item').forEach(it=>{
+    const href=it.getAttribute('href')||'';
+    if(HREF_BRAND.test(href)||deletedBN.has(baseName(href))){
+      const id=it.getAttribute('id'); if(id) removedIds.add(id);
+      it.parentNode&&it.parentNode.removeChild(it);
+    }
+  });
+  doc.querySelectorAll('itemref').forEach(ir=>{ if(removedIds.has(ir.getAttribute('idref')||'')) ir.parentNode&&ir.parentNode.removeChild(ir); });
+  doc.querySelectorAll('reference').forEach(r=>{const h=r.getAttribute('href')||'';if(HREF_BRAND.test(h)||deletedBN.has(baseName(h)))r.parentNode&&r.parentNode.removeChild(r);});
+  stripBrandFromTextNodes(doc);
+  let xml=serializer.serializeToString(doc);
+  const prolog=(str.match(/^\uFEFF?\s*<\?xml[^>]*\?>/i)||[''])[0];
+  if(prolog&&!/^\uFEFF?\s*<\?xml/i.test(xml)) xml=prolog+'\n'+xml;
+  return xml.replace(BRAND_G,'');
+}
+function cleanNcx(str, deletedBN){
+  let doc; try{doc=parser.parseFromString(str,'application/xml');if(doc.getElementsByTagName('parsererror').length)throw 0;}
+  catch(e){return str.replace(BRAND_G,'');}
+  doc.querySelectorAll('navPoint').forEach(np=>{
+    const c=np.querySelector('content'); const src=c?(c.getAttribute('src')||''):'';
+    const lbl=np.querySelector('navLabel text'); const lt=lbl?lbl.textContent:'';
+    if(HREF_BRAND.test(src)||deletedBN.has(baseName(src))||isWatermarkOnlyText(lt)) np.parentNode&&np.parentNode.removeChild(np);
+  });
+  stripBrandFromTextNodes(doc);
+  let xml=serializer.serializeToString(doc);
+  const prolog=(str.match(/^\uFEFF?\s*<\?xml[^>]*\?>/i)||[''])[0];
+  if(prolog&&!/^\uFEFF?\s*<\?xml/i.test(xml)) xml=prolog+'\n'+xml;
+  return xml.replace(BRAND_G,'');
+}
+
+/* ============================================================
+   App wiring
+   ============================================================ */
+const drop=document.getElementById('drop'), fileInput=document.getElementById('file'),
+      progress=document.getElementById('progress'), bar=document.getElementById('bar'),
+      statusEl=document.getElementById('status'), result=document.getElementById('result'),
+      dl=document.getElementById('dl'), note=document.getElementById('note'),
+      sInst=document.getElementById('sInst'), sImg=document.getElementById('sImg'), sPage=document.getElementById('sPage'),
+      resultTitle=document.getElementById('resultTitle');
+
+drop.addEventListener('click',()=>fileInput.click());
+drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fileInput.click();}});
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();if(ev==='drop'||e.target===drop)drop.classList.remove('drag');}));
+drop.addEventListener('drop',e=>{const f=e.dataTransfer?.files;if(f&&f.length)queue(Array.from(f));});
+fileInput.addEventListener('change',e=>{if(e.target.files.length)queue(Array.from(e.target.files));});
+
+function looksEpub(f){
+  return f && (f.type==='application/epub+zip' || /\.epub$/i.test(f.name) || f.type==='' || /octet-stream/.test(f.type));
+}
+async function queue(files){
+  const epubs=files.filter(looksEpub);
+  if(!epubs.length){ fail('That doesn’t look like an EPUB file.'); return; }
+  for(const f of epubs){ await processEPUB(f); }
+}
+function fail(msg){ statusEl.textContent=msg; statusEl.classList.add('err'); progress.style.display='none'; }
+function setProgress(p){ bar.style.width=p+'%'; }
+
+async function processEPUB(file){
+  statusEl.classList.remove('err'); result.classList.remove('show');
+  statusEl.textContent='Reading “'+file.name+'”…';
+  progress.style.display='block'; setProgress(4);
+  try{
+    const zip = await JSZip.loadAsync(file);
+    const entries = Object.entries(zip.files).filter(([,e])=>!e.dir);
+    const total = entries.length || 1;
+    let done=0, marks=0, imagesRemoved=0, pagesRemoved=0;
+    const deleted=new Set(); const opfNames=[]; const ncxNames=[];
+
+    for(const [name,entry] of entries){
+      const lower=name.toLowerCase();
+      if(/\.(png|jpe?g|gif|svg|webp)$/i.test(lower)){
+        if(/oceanofpdf/i.test(baseName(name))){ deleted.add(name); imagesRemoved++; }
+      } else if(lower.endsWith('.opf')){ opfNames.push(name); }
+      else if(lower.endsWith('.ncx')){ ncxNames.push(name); }
+      else if(/\.(x?html?|xml)$/i.test(lower)){
+        const str=await entry.async('string');
+        const mime=lower.endsWith('.xml')?'application/xml':'application/xhtml+xml';
+        const res=cleanDocument(str,mime);
+        marks+=res.removed;
+        if(res.emptyDoc || /oceanofpdf/i.test(baseName(name))){ deleted.add(name); pagesRemoved++; }
+        else zip.file(name,res.xml);
+      } else if(/\.(css|txt|opf|json)$/i.test(lower)){
+        const str=await entry.async('string');
+        if(BRAND.test(str)){ marks+=countBrand(str); zip.file(name,str.replace(BRAND_G,'')); }
+      }
+      done++; setProgress(6+Math.round(done/total*80));
+    }
+
+    const deletedBN=new Set([...deleted].map(baseName));
+    for(const n of opfNames){ zip.file(n, cleanOpf(await zip.file(n).async('string'), deletedBN)); }
+    for(const n of ncxNames){ zip.file(n, cleanNcx(await zip.file(n).async('string'), deletedBN)); }
+    for(const n of deleted){ zip.remove(n); }
+    setProgress(92);
+
+    // Re-zip. EPUB spec wants 'mimetype' stored first & uncompressed; rebuild to honour that.
+    const out=new JSZip();
+    if(zip.file('mimetype')) out.file('mimetype','application/epub+zip',{compression:'STORE'});
+    for(const [name,entry] of Object.entries(zip.files)){
+      if(entry.dir||name==='mimetype') continue;
+      out.file(name, await entry.async('uint8array'));
+    }
+    const blob=await out.generateAsync({type:'blob',mimeType:'application/epub+zip',compression:'DEFLATE'});
+    setProgress(100);
+
+    const outName=extractBookName(file.name);
+    const url=URL.createObjectURL(blob);
+    dl.href=url; dl.download=outName;
+    sInst.textContent=marks; sImg.textContent=imagesRemoved; sPage.textContent=pagesRemoved;
+    resultTitle.textContent = (marks+imagesRemoved+pagesRemoved)>0 ? 'Cleaned ✓' : 'No watermarks found';
+    note.textContent = 'Saved as “'+outName+'”. Note: a watermark printed directly onto a cover image can’t be undone automatically.';
+    result.classList.add('show');
+    statusEl.textContent='Done.';
+    // Auto-download (desktop). Mobile may ignore this — the button is always there.
+    try{ dl.click(); }catch(_){}
+  }catch(err){
+    fail('Error: '+(err && err.message ? err.message : err));
+  }
+}
+
+function extractBookName(filename){
+  let m=filename.match(/_OceanofPDF\.com(.+?)_-_.+\.epub$/i);
+  if(m) return m[1].replace(/_/g,' ').trim()+'.epub';
+  let base=filename.replace(/\.epub$/i,'').replace(/OceanofPDF\.com/ig,'').replace(/^[\s_\-–—]+|[\s_\-–—]+$/g,'').replace(/_/g,' ').trim();
+  return (base||'Cleaned Book')+'.epub';
+}
+
+/* Theme */
+const themeToggle=document.getElementById('themeToggle');
+function applyTheme(t){ document.documentElement.dataset.theme=t; themeToggle.textContent= t==='light'?'◑':'◐'; }
+let saved; try{ saved=localStorage.getItem('theme'); }catch(_){}
+applyTheme(saved || (matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'));
+themeToggle.addEventListener('click',()=>{
+  const next=document.documentElement.dataset.theme==='light'?'dark':'light';
+  applyTheme(next); try{localStorage.setItem('theme',next);}catch(_){}
+});
+
+/* Service worker for offline */
+if('serviceWorker' in navigator){
+  addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+
+/* Install prompt (Android/desktop Chrome) */
+let deferredPrompt=null; const installBtn=document.getElementById('installBtn');
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;installBtn.style.display='inline-flex';});
+installBtn.addEventListener('click',async()=>{
+  if(!deferredPrompt) return;
+  deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; installBtn.style.display='none';
+});
+</script>
+</body>
+</html>
