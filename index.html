@@ -94,6 +94,19 @@
   .dl:hover{background:var(--accent-deep)}
   .note{font-size:.8rem;color:var(--muted);margin:0 0 12px}
 
+  .results{display:flex;flex-direction:column;gap:14px;margin-top:18px}
+  .result.card{margin-top:0;display:block;animation:rise .4s ease}
+  .result.pending{opacity:.55}
+  .result.err{border-color:var(--danger)}
+  .cardTitle{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .cardTitle .fname{margin:0 0 12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge{flex:none;font-size:.65rem;text-transform:uppercase;letter-spacing:.1em;
+         padding:4px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted);
+         margin-bottom:12px}
+  .badge.ok{color:var(--accent);border-color:var(--accent)}
+  .badge.err{color:var(--danger);border-color:var(--danger)}
+  .dlAll{margin-top:18px;display:none}
+
   footer{margin-top:34px;color:var(--muted);font-size:.8rem;text-align:center}
   footer a{color:var(--accent);text-decoration:none}
   .pill{display:inline-block;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;
@@ -130,16 +143,24 @@
   <div id="progress"><div id="bar"></div></div>
   <div id="status"></div>
 
-  <div class="result" id="result">
-    <h3 id="resultTitle">Cleaned ✓</h3>
-    <div class="stats">
-      <div class="stat"><div class="n" id="sInst">0</div><div class="l">marks</div></div>
-      <div class="stat"><div class="n" id="sImg">0</div><div class="l">images</div></div>
-      <div class="stat"><div class="n" id="sPage">0</div><div class="l">pages</div></div>
+  <div class="results" id="results"></div>
+  <button class="dl dlAll" id="dlAll" type="button">↓ Download all as ZIP</button>
+
+  <template id="cardTpl">
+    <div class="result card">
+      <div class="cardTitle">
+        <h3 class="fname"></h3>
+        <span class="badge"></span>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="n sInst">0</div><div class="l">marks</div></div>
+        <div class="stat"><div class="n sImg">0</div><div class="l">images</div></div>
+        <div class="stat"><div class="n sPage">0</div><div class="l">pages</div></div>
+      </div>
+      <a class="dl" download style="display:none">↓ Download cleaned EPUB</a>
+      <p class="note"></p>
     </div>
-    <a class="dl" id="dl" download>↓ Download cleaned EPUB</a>
-    <p class="note" id="note"></p>
-  </div>
+  </template>
 
   <button id="installBtn" class="iconbtn" style="width:auto;padding:0 16px;height:42px;border-radius:12px;">⤓ Install app</button>
 
@@ -197,7 +218,7 @@ const serializer = new XMLSerializer();
 
 function isWatermarkOnlyText(text){
   if(!text) return false;
-  let t = text.replace(/ /g,' ');
+  let t = text.replace(/ /g,' ');
   if(!BRAND.test(t)) return false;
   t = t.replace(BRAND_G,' ').replace(BOILER,' ');
   t = t.replace(/[\s.,\-–—:;|•*·•()[\]'"“”‘’/\\<>~!?@#]+/g,'');
@@ -323,10 +344,8 @@ function cleanNcx(str, deletedBN){
    ============================================================ */
 const drop=document.getElementById('drop'), fileInput=document.getElementById('file'),
       progress=document.getElementById('progress'), bar=document.getElementById('bar'),
-      statusEl=document.getElementById('status'), result=document.getElementById('result'),
-      dl=document.getElementById('dl'), note=document.getElementById('note'),
-      sInst=document.getElementById('sInst'), sImg=document.getElementById('sImg'), sPage=document.getElementById('sPage'),
-      resultTitle=document.getElementById('resultTitle');
+      statusEl=document.getElementById('status'), results=document.getElementById('results'),
+      dlAll=document.getElementById('dlAll'), cardTpl=document.getElementById('cardTpl');
 
 drop.addEventListener('click',()=>fileInput.click());
 drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fileInput.click();}});
@@ -338,18 +357,79 @@ fileInput.addEventListener('change',e=>{if(e.target.files.length)queue(Array.fro
 function looksEpub(f){
   return f && (f.type==='application/epub+zip' || /\.epub$/i.test(f.name) || f.type==='' || /octet-stream/.test(f.type));
 }
-async function queue(files){
-  const epubs=files.filter(looksEpub);
-  if(!epubs.length){ fail('That doesn’t look like an EPUB file.'); return; }
-  for(const f of epubs){ await processEPUB(f); }
-}
 function fail(msg){ statusEl.textContent=msg; statusEl.classList.add('err'); progress.style.display='none'; }
 function setProgress(p){ bar.style.width=p+'%'; }
 
-async function processEPUB(file){
-  statusEl.classList.remove('err'); result.classList.remove('show');
-  statusEl.textContent='Reading “'+file.name+'”…';
-  progress.style.display='block'; setProgress(4);
+async function queue(files){
+  const epubs=files.filter(looksEpub);
+  results.innerHTML=''; dlAll.style.display='none'; dlAll.onclick=null;
+  statusEl.classList.remove('err');
+  if(!epubs.length){ fail('That doesn’t look like an EPUB file.'); return; }
+  progress.style.display='block'; setProgress(0);
+
+  const successes=[];
+  for(let i=0;i<epubs.length;i++){
+    const file=epubs[i];
+    const refs=createCard(file);
+    statusEl.textContent = epubs.length>1
+      ? 'Processing “'+file.name+'”… ('+(i+1)+'/'+epubs.length+')'
+      : 'Reading “'+file.name+'”…';
+    const base=i/epubs.length*100, span=100/epubs.length;
+    const res=await cleanEpub(file, p=>setProgress(base+p/100*span));
+    renderCard(refs, res);
+    if(!res.error) successes.push(res);
+  }
+  setProgress(100);
+  statusEl.textContent='Done.';
+
+  if(epubs.length===1 && successes.length===1){
+    // Auto-download (desktop). Mobile may ignore this — the button is always there.
+    try{ successes[0].dlEl.click(); }catch(_){}
+  } else if(successes.length>=2){
+    dlAll.style.display='inline-flex';
+    dlAll.onclick=()=>downloadAllZip(successes);
+  }
+}
+
+function createCard(file){
+  const card=cardTpl.content.firstElementChild.cloneNode(true);
+  card.classList.add('pending');
+  const refs={
+    card,
+    fname:card.querySelector('.fname'),
+    badge:card.querySelector('.badge'),
+    sInst:card.querySelector('.sInst'),
+    sImg:card.querySelector('.sImg'),
+    sPage:card.querySelector('.sPage'),
+    dl:card.querySelector('.dl'),
+    note:card.querySelector('.note')
+  };
+  refs.fname.textContent=file.name;
+  refs.badge.textContent='Processing…';
+  results.appendChild(card);
+  return refs;
+}
+
+function renderCard(refs, res){
+  refs.card.classList.remove('pending');
+  if(res.error){
+    refs.card.classList.add('err');
+    refs.badge.textContent='Error';
+    refs.badge.classList.add('err');
+    refs.note.textContent=res.error;
+    return;
+  }
+  const {outName, marks, imagesRemoved, pagesRemoved}=res;
+  refs.sInst.textContent=marks; refs.sImg.textContent=imagesRemoved; refs.sPage.textContent=pagesRemoved;
+  refs.badge.textContent = (marks+imagesRemoved+pagesRemoved)>0 ? 'Cleaned ✓' : 'No watermarks';
+  refs.badge.classList.add('ok');
+  refs.note.textContent = 'Saved as “'+outName+'”. Note: a watermark printed directly onto a cover image can’t be undone automatically.';
+  refs.dl.href=res.url; refs.dl.download=outName; refs.dl.style.display='inline-flex';
+  res.dlEl=refs.dl;
+}
+
+async function cleanEpub(file, onProgress){
+  onProgress(4);
   try{
     const zip = await JSZip.loadAsync(file);
     const entries = Object.entries(zip.files).filter(([,e])=>!e.dir);
@@ -374,14 +454,14 @@ async function processEPUB(file){
         const str=await entry.async('string');
         if(BRAND.test(str)){ marks+=countBrand(str); zip.file(name,str.replace(BRAND_G,'')); }
       }
-      done++; setProgress(6+Math.round(done/total*80));
+      done++; onProgress(6+Math.round(done/total*80));
     }
 
     const deletedBN=new Set([...deleted].map(baseName));
     for(const n of opfNames){ zip.file(n, cleanOpf(await zip.file(n).async('string'), deletedBN)); }
     for(const n of ncxNames){ zip.file(n, cleanNcx(await zip.file(n).async('string'), deletedBN)); }
     for(const n of deleted){ zip.remove(n); }
-    setProgress(92);
+    onProgress(92);
 
     // Re-zip. EPUB spec wants 'mimetype' stored first & uncompressed; rebuild to honour that.
     const out=new JSZip();
@@ -391,21 +471,33 @@ async function processEPUB(file){
       out.file(name, await entry.async('uint8array'));
     }
     const blob=await out.generateAsync({type:'blob',mimeType:'application/epub+zip',compression:'DEFLATE'});
-    setProgress(100);
+    onProgress(100);
 
     const outName=extractBookName(file.name);
     const url=URL.createObjectURL(blob);
-    dl.href=url; dl.download=outName;
-    sInst.textContent=marks; sImg.textContent=imagesRemoved; sPage.textContent=pagesRemoved;
-    resultTitle.textContent = (marks+imagesRemoved+pagesRemoved)>0 ? 'Cleaned ✓' : 'No watermarks found';
-    note.textContent = 'Saved as “'+outName+'”. Note: a watermark printed directly onto a cover image can’t be undone automatically.';
-    result.classList.add('show');
-    statusEl.textContent='Done.';
-    // Auto-download (desktop). Mobile may ignore this — the button is always there.
-    try{ dl.click(); }catch(_){}
+    return {blob, url, outName, marks, imagesRemoved, pagesRemoved};
   }catch(err){
-    fail('Error: '+(err && err.message ? err.message : err));
+    return {error:'Error: '+(err && err.message ? err.message : err)};
   }
+}
+
+function uniqueZipName(name, used){
+  if(!used.has(name)){ used.add(name); return name; }
+  let i=2, candidate;
+  do{ candidate=name.replace(/(\.[^.]+)$/, ' ('+i+')$1'); i++; }while(used.has(candidate));
+  used.add(candidate);
+  return candidate;
+}
+async function downloadAllZip(successes){
+  const zip=new JSZip();
+  const used=new Set();
+  for(const r of successes){ zip.file(uniqueZipName(r.outName, used), r.blob); }
+  const blob=await zip.generateAsync({type:'blob'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download='cleaned-epubs.zip';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
 function extractBookName(filename){
