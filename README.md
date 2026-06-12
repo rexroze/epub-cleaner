@@ -39,8 +39,11 @@ home screen and launch it like a native app.
 
 ## How to use
 1. Open the site (or the installed app).
-2. Drop an `.epub` onto the box, or tap to choose one. You can select several at once.
-3. The cleaned file downloads automatically; on mobile, tap **Download cleaned EPUB**.
+2. Drop one or more `.epub` files onto the box, or tap to choose them.
+3. Each file gets its own result card with stats and a download link.
+   - A single file downloads automatically (and via its card's button).
+   - For multiple files, use each card's download link, or tap
+     **Download all as ZIP** once everything finishes.
 
 ## Install on your phone
 - **Android / Chrome / Edge:** open the site → menu → **Install app** (or tap the
