@@ -1,7 +1,7 @@
 {
-  "name": "EPUB Watermark Cleaner",
+  "name": "EPUB Cleaner",
   "short_name": "EPUB Cleaner",
-  "description": "Remove OceanofPDF.com watermarks from EPUB files — fully offline, on-device.",
+  "description": "Remove promotional watermarks, ad pages, and tracking links from EPUB files — fully offline, on-device.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

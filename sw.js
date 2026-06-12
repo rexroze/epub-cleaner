@@ -1,6 +1,6 @@
 /* EPUB Cleaner service worker — offline-first app shell.
  * Bump CACHE on any release so clients pick up new files. */
-const CACHE = 'epub-cleaner-v1';
+const CACHE = 'epub-cleaner-v2';
 const ASSETS = [
   './',
   './index.html',
