@@ -153,10 +153,43 @@
 /* ============================================================
    Watermark-removal engine (tested separately; see test.js)
    ============================================================ */
-const BRAND   = /ocean\s*of\s*pdf/i;
-const BRAND_G = /ocean\s*of\s*pdf\s*(?:\.\s*com)?/gi;
-const HREF_BRAND = /oceanofpdf/i;
-const BOILER = /\b(?:visit|downloaded\s+from|download(?:ed)?(?:\s+more)?|read\s+more(?:\s+at)?|more\s+free\s+books(?:\s+at)?|free\s+books(?:\s+at)?|get\s+(?:more\s+)?books(?:\s+at)?|find\s+more(?:\s+books)?(?:\s+at)?|for\s+more\s+books|www|https?)\b/gi;
+// Distinctive ebook-sharing site names — safe to strip from running text/headings.
+const BRAND_TEXT_PATTERNS = [
+  'ocean\\s*of\\s*pdf',
+  "anna'?s\\s*archive",
+  'z[\\s-]*library',
+  'library\\s*genesis',
+  'libgen',
+  'avax[\\s-]*home',
+  'pdf[\\s-]*drive',
+  'dokumen\\.?\\s*pub',
+  'wow[\\s-]*e[\\s-]*book',
+  'ebook[\\s-]*hunter'
+];
+// Domain/filename fragments — used for links, images, and filenames, where a
+// match is unambiguous even for more generic-sounding site names.
+const BRAND_HREF_PATTERNS = [
+  'oceanofpdf',
+  'annas-?archive',
+  'z-?library',
+  'zlib',
+  'libgen',
+  'avaxhome',
+  'pdfdrive',
+  'dokumen\\.pub',
+  'wowebook',
+  'ebook-?hunter',
+  'allitebooks',
+  'freecoursesite',
+  'freetutorials',
+  'bookfrom',
+  'ebooks?-?it\\.org'
+];
+const TLD = '(?:\\s*\\.\\s*(?:com|org|net|pub|is|li|ws|to))?';
+const BRAND   = new RegExp('(?:'+BRAND_TEXT_PATTERNS.join('|')+')','i');
+const BRAND_G = new RegExp('(?:'+BRAND_TEXT_PATTERNS.join('|')+')'+TLD,'gi');
+const HREF_BRAND = new RegExp(BRAND_HREF_PATTERNS.join('|'),'i');
+const BOILER = /\b(?:visit|downloaded\s+from|download(?:ed)?(?:\s+more)?|read\s+more(?:\s+at)?|more\s+free\s+books(?:\s+at)?|free\s+books(?:\s+at)?|get\s+(?:more\s+)?books(?:\s+at)?|find\s+more(?:\s+books)?(?:\s+at)?|for\s+more\s+books|join\s+(?:us\s+)?(?:on|at)|telegram|discord|www|https?)\b/gi;
 const BLOCKISH = new Set(['a','p','h1','h2','h3','h4','h5','h6','div','span','li','td','th','section','figure','figcaption','header','footer','blockquote','center','small','strong','em','b','i']);
 
 const parser = new DOMParser();
@@ -164,10 +197,10 @@ const serializer = new XMLSerializer();
 
 function isWatermarkOnlyText(text){
   if(!text) return false;
-  let t = text.replace(/\u00a0/g,' ');
+  let t = text.replace(/ /g,' ');
   if(!BRAND.test(t)) return false;
   t = t.replace(BRAND_G,' ').replace(BOILER,' ');
-  t = t.replace(/[\s.,\-–—:;|•*·\u2022()[\]'"“”‘’/\\<>~!?@#]+/g,'');
+  t = t.replace(/[\s.,\-–—:;|•*·•()[\]'"“”‘’/\\<>~!?@#]+/g,'');
   return t.length===0;
 }
 function hasMeaningfulImage(el){
@@ -179,11 +212,11 @@ function hasMeaningfulImage(el){
   return false;
 }
 function anyAncestorIn(el,set){let p=el.parentNode;while(p){if(set.has(p))return true;p=p.parentNode;}return false;}
-function countBrand(str){const m=str.match(/ocean\s*of\s*pdf/gi);return m?m.length:0;}
+function countBrand(str){const m=str.match(BRAND_G);return m?m.length:0;}
 function baseName(p){return p.split('/').pop();}
 
 function cleanDocument(str, mime){
-  const prolog  = (str.match(/^\uFEFF?\s*<\?xml[^>]*\?>/i)||[''])[0];
+  const prolog  = (str.match(/^﻿?\s*<\?xml[^>]*\?>/i)||[''])[0];
   const doctype = (str.match(/<!DOCTYPE[^>]*>/i)||[''])[0];
   let doc;
   try{
@@ -223,7 +256,7 @@ function cleanDocument(str, mime){
   });
 
   let xml = serializer.serializeToString(doc);
-  if(prolog && !/^\uFEFF?\s*<\?xml/i.test(xml)) xml = prolog+'\n'+xml;
+  if(prolog && !/^﻿?\s*<\?xml/i.test(xml)) xml = prolog+'\n'+xml;
   if(doctype && !/<!DOCTYPE/i.test(xml)){
     xml = (prolog?prolog+'\n':'') + doctype + '\n' + xml.replace(prolog,'').replace(/^\n/,'');
   }
@@ -235,9 +268,11 @@ function cleanDocument(str, mime){
   return { xml, removed, emptyDoc:!!emptyDoc };
 }
 function textFallback(str){
+  const wrapped = new RegExp('<(p|h[1-6]|div|a|span|center|small)\\b[^>]*>(?:\\s|&nbsp;|<br\\s*\\/?>)*(?:<a\\b[^>]*>)?\\s*(?:visit\\s+)?(?:'+BRAND_TEXT_PATTERNS.join('|')+')'+TLD+'\\s*(?:<\\/a>)?(?:\\s|&nbsp;|<br\\s*\\/?>)*<\\/\\1>','gi');
+  const brandImg = new RegExp('<img\\b[^>]*(?:'+BRAND_HREF_PATTERNS.join('|')+')[^>]*>','gi');
   let out = str
-    .replace(/<(p|h[1-6]|div|a|span|center|small)\b[^>]*>(?:\s|&nbsp;|<br\s*\/?>)*(?:<a\b[^>]*>)?\s*(?:visit\s+)?ocean\s*of\s*pdf(?:\.com)?\s*(?:<\/a>)?(?:\s|&nbsp;|<br\s*\/?>)*<\/\1>/gi,'')
-    .replace(/<img\b[^>]*oceanofpdf[^>]*>/gi,'')
+    .replace(wrapped,'')
+    .replace(brandImg,'')
     .replace(BRAND_G,'');
   return out;
 }
@@ -264,8 +299,8 @@ function cleanOpf(str, deletedBN){
   doc.querySelectorAll('reference').forEach(r=>{const h=r.getAttribute('href')||'';if(HREF_BRAND.test(h)||deletedBN.has(baseName(h)))r.parentNode&&r.parentNode.removeChild(r);});
   stripBrandFromTextNodes(doc);
   let xml=serializer.serializeToString(doc);
-  const prolog=(str.match(/^\uFEFF?\s*<\?xml[^>]*\?>/i)||[''])[0];
-  if(prolog&&!/^\uFEFF?\s*<\?xml/i.test(xml)) xml=prolog+'\n'+xml;
+  const prolog=(str.match(/^﻿?\s*<\?xml[^>]*\?>/i)||[''])[0];
+  if(prolog&&!/^﻿?\s*<\?xml/i.test(xml)) xml=prolog+'\n'+xml;
   return xml.replace(BRAND_G,'');
 }
 function cleanNcx(str, deletedBN){
@@ -278,8 +313,8 @@ function cleanNcx(str, deletedBN){
   });
   stripBrandFromTextNodes(doc);
   let xml=serializer.serializeToString(doc);
-  const prolog=(str.match(/^\uFEFF?\s*<\?xml[^>]*\?>/i)||[''])[0];
-  if(prolog&&!/^\uFEFF?\s*<\?xml/i.test(xml)) xml=prolog+'\n'+xml;
+  const prolog=(str.match(/^﻿?\s*<\?xml[^>]*\?>/i)||[''])[0];
+  if(prolog&&!/^﻿?\s*<\?xml/i.test(xml)) xml=prolog+'\n'+xml;
   return xml.replace(BRAND_G,'');
 }
 
@@ -325,7 +360,7 @@ async function processEPUB(file){
     for(const [name,entry] of entries){
       const lower=name.toLowerCase();
       if(/\.(png|jpe?g|gif|svg|webp)$/i.test(lower)){
-        if(/oceanofpdf/i.test(baseName(name))){ deleted.add(name); imagesRemoved++; }
+        if(HREF_BRAND.test(baseName(name))){ deleted.add(name); imagesRemoved++; }
       } else if(lower.endsWith('.opf')){ opfNames.push(name); }
       else if(lower.endsWith('.ncx')){ ncxNames.push(name); }
       else if(/\.(x?html?|xml)$/i.test(lower)){
@@ -333,7 +368,7 @@ async function processEPUB(file){
         const mime=lower.endsWith('.xml')?'application/xml':'application/xhtml+xml';
         const res=cleanDocument(str,mime);
         marks+=res.removed;
-        if(res.emptyDoc || /oceanofpdf/i.test(baseName(name))){ deleted.add(name); pagesRemoved++; }
+        if(res.emptyDoc || HREF_BRAND.test(baseName(name))){ deleted.add(name); pagesRemoved++; }
         else zip.file(name,res.xml);
       } else if(/\.(css|txt|opf|json)$/i.test(lower)){
         const str=await entry.async('string');
@@ -374,9 +409,9 @@ async function processEPUB(file){
 }
 
 function extractBookName(filename){
-  let m=filename.match(/_OceanofPDF\.com(.+?)_-_.+\.epub$/i);
+  let m=filename.match(new RegExp('^_?(?:'+BRAND_TEXT_PATTERNS.join('|')+')'+TLD+'(.+?)_-_.+\\.epub$','i'));
   if(m) return m[1].replace(/_/g,' ').trim()+'.epub';
-  let base=filename.replace(/\.epub$/i,'').replace(/OceanofPDF\.com/ig,'').replace(/^[\s_\-–—]+|[\s_\-–—]+$/g,'').replace(/_/g,' ').trim();
+  let base=filename.replace(/\.epub$/i,'').replace(BRAND_G,'').replace(/^[\s_\-–—]+|[\s_\-–—]+$/g,'').replace(/_/g,' ').trim();
   return (base||'Cleaned Book')+'.epub';
 }
 
